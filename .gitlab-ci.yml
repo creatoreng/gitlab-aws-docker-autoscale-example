@@ -1,0 +1,70 @@
+stages:
+  - build
+  - test
+  - artifact
+
+.commit-rules:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_EXTERNAL_PULL_REQUEST_TARGET_BRANCH_NAME == "main"
+
+build:amd64:
+  stage: build
+  extends: .commit-rules
+  cache:
+    key: $CI_COMMIT_REF_SLUG-amd64
+    paths:
+      - build-cache/amd64
+  image:
+    name: gcc:latest
+    entrypoint: [""]
+  script:
+    - ./build.sh
+  artifacts:
+    name: "$CI_JOB_NAME-$CI_COMMIT_REF_SLUG"
+    paths:
+      - build/amd64
+  tags:
+    - gitlab-build
+
+test:amd64:
+  stage: test
+  extends: .commit-rules
+  dependencies:
+    - build:amd64
+  variables:
+    GIT_STRATEGY: none
+  image:
+    name: gcc:latest
+    entrypoint: [""]
+  script:
+    - ./build/amd64/hello
+  tags:
+    - gitlab-build
+
+artifact:s3:
+  stage: artifact
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  dependencies:
+    - build:amd64
+  cache: {}
+  image: registry.gitlab.com/gitlab-org/cloud-deploy/aws-base:latest
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - export DEPLOY_TARBALL="$CI_PROJECT_NAME-$CI_COMMIT_REF_SLUG.tar.gz"
+    - export ARTIFACT_DEST="s3://gitlab-artifact-unique-identifier/$CI_COMMIT_REF_SLUG/$DEPLOY_TARBALL"
+
+    # create artifact tarball
+    - tar -czf $DEPLOY_TARBALL build
+
+    # configure AWS CLI
+    - aws configure set region us-east-1
+    - aws configure set credential_source Ec2InstanceMetadata
+    - aws configure list  # should show access key and secret from instance profile
+
+    # upload artifact tarball to s3
+    - aws s3 cp --acl private $DEPLOY_TARBALL $ARTIFACT_DEST
+  tags:
+    - gitlab-build
